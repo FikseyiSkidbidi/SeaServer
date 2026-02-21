@@ -38,6 +38,14 @@ async def shoot(sid, data):
             await sio.emit('receive_shot', data, room=room, skip_sid=sid)
 
 @sio.event
+async def shot_result(sid, data):
+    # Пересылаем результат выстрела обратно тому, кто стрелял
+    rooms = sio.rooms(sid)
+    for room in rooms:
+        if room.startswith("room_"):
+            await sio.emit('receive_shot_result', data, room=room, skip_sid=sid)
+
+@sio.event
 async def disconnect(sid):
     global waiting_player
     if waiting_player == sid:
