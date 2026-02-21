@@ -1,37 +1,50 @@
-# server.py
-import socket
-import threading
+import socketio
+from aiohttp import web
+import os
 
-HOST = '127.0.0.1' # Поставь IP своего ПК для игры по сети
-PORT = 65432
+sio = socketio.AsyncServer(cors_allowed_origins='*')
+app = web.Application()
+sio.attach(app)
 
-def handle_client(conn, addr, other_conn):
-    try:
-        while True:
-            data = conn.recv(1024)
-            if not data: break
-            if other_conn:
-                other_conn.sendall(data) # Пересылаем ход сопернику
-    except:
-        pass
-    finally:
-        conn.close()
+# Хранилище игрока, который ждет пару
+waiting_player = None
 
-def start_server():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((HOST, PORT))
-    server.listen(2)
-    print("Сервер запущен. Ожидание игроков...")
+@sio.event
+async def connect(sid, environ):
+    print(f"Подключился: {sid}")
 
-    clients = []
-    while len(clients) < 2:
-        conn, addr = server.accept()
-        print(f"Подключился: {addr}")
-        clients.append(conn)
+@sio.event
+async def find_game(sid):
+    global waiting_player
+    if waiting_player is None:
+        waiting_player = sid
+        await sio.emit('waiting', {'message': 'Поиск соперника...'}, to=sid)
+    else:
+        room = f"room_{waiting_player}"
+        sio.enter_room(waiting_player, room)
+        sio.enter_room(sid, room)
         
-    print("Оба игрока подключены. Игра начинается!")
-    threading.Thread(target=handle_client, args=(clients[0], clients[0].getpeername(), clients[1])).start()
-    threading.Thread(target=handle_client, args=(clients[1], clients[1].getpeername(), clients[0])).start()
+        # Рассылаем роли: один ходит первым, другой вторым
+        await sio.emit('game_start', {'turn': True, 'enemy': sid}, to=waiting_player)
+        await sio.emit('game_start', {'turn': False, 'enemy': waiting_player}, to=sid)
+        waiting_player = None
 
-if __name__ == "__main__":
-    start_server()
+@sio.event
+async def shoot(sid, data):
+    # Пересылаем данные о выстреле второму игроку в комнате
+    rooms = sio.rooms(sid)
+    for room in rooms:
+        if room.startswith("room_"):
+            await sio.emit('receive_shot', data, room=room, skip_sid=sid)
+
+@sio.event
+async def disconnect(sid):
+    global waiting_player
+    if waiting_player == sid:
+        waiting_player = None
+    print(f"Отключился: {sid}")
+
+if __name__ == '__main__':
+    # Render передает PORT через переменную окружения
+    port = int(os.environ.get('PORT', 10000))
+    web.run_app(app, port=port)
